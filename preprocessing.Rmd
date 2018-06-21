@@ -1,0 +1,183 @@
+---
+title: "Ugly Selfies Analysis, Preprocessing"
+author: "Ruth Page (principal investigator), Bodo Winter (analysis)"
+date: "6/11/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+In this file, the Qualtrics data will be preprocessed to be amenable to statistical analysis. The file "analysis.Rmd" depends on the output of this file. The raw data is contained in the file "qualtrics_raw_data_june6_2018_01.58.csv".
+
+## Preprocessing
+
+```{r load_stuff, message = FALSE}
+library(tidyverse)
+library(stringr)
+
+self <- read_csv('data/qualtrics_raw_data_june6_2018_01.58.csv')
+```
+
+Rename columns and select relevant columns for cleansiness.
+
+```{r clean_columns, message = FALSE}
+# rename funky columns
+self <- rename(self,
+               CountryTopics = `Country - Topics`,
+               Dur = `Duration (in seconds)`)
+
+# select relevant columns
+self <- select(self,
+               ResponseId, Dur, Age, Country, Gender, Socialmedia, Selfietaking, F_FB_C_D_1:M_FB_D_D_5)
+
+# check
+self
+```
+
+We want the data in long format.
+
+```{r make_long, message = FALSE}
+self <- gather(self,
+               key = 'Condition',
+               value = 'Response', -(ResponseId:Selfietaking)) %>%
+  arrange(ResponseId)
+```
+
+Get rid of the control condition. This will not be included in the main analysis.
+
+```{r clear_control, message = FALSE}
+self <- filter(self,
+               !str_detect(Condition, '(c|C)ontrol'))
+```
+
+The condition identifiers are the names of the Qualtrics questions. They contain information about the conditions in the following order: Male versus female, from below versus level, close versus distant, and side-gaze versus direct-gaze.
+
+```{r separate_cols, message = FALSE, warning = FALSE}
+self <- separate(self,
+                 Condition,
+                 into = c('M_vs_F', 'FB_vs_L', 'C_vs_D', 'S_vs_D', 'SelfieType'),
+                 remove = FALSE)
+
+# check:
+self
+```
+
+Explanation of content at this stage.
+
+- M_vs_F contains information about whether the stimulus shown to participants depicted a female or male participant.
+- FB_vs_L contains information about whether the camera angle was from below or level.
+- C_vs_D contains information about whether the camera was close to the depicted person or far away the person.
+- S_vs_D contains information about whether the depicted person looked into the camera or away from it (towards the sides).
+- SelfieType contains information about which hashtag was rated.
+
+We will rename the columns for transparency:
+
+```{r lengthen_labels, message = FALSE, warning = FALSE}
+self <- rename(self,
+	StimGender = M_vs_F,
+	Tilt = FB_vs_L,
+	Distance = C_vs_D,
+	Eyes = S_vs_D)
+```
+
+We will further rename the content of these columns into more transparent labels, avoiding abbreviations.
+
+```{r rename_colcontent, message = FALSE, warning = FALSE}
+self <- mutate(self,
+               StimGender = ifelse(StimGender == 'F', 'Female', 'Male'),
+               Tilt = ifelse(Tilt == 'FB', 'Tilted', 'Level'),
+               Distance = ifelse(Distance == 'C', 'Near', 'Far'),
+               Eyes = ifelse(Eyes == 'S', 'Side', 'Direct'))
+```
+
+The SelfieType column contains numeric information which codes which hashtag was rated.
+
+```{r rename_hashtags, message = FALSE, warning = FALSE}
+self <- mutate(self,
+               SelfieType = ifelse(SelfieType == '1', 'Boring', SelfieType),
+               SelfieType = ifelse(SelfieType == '2', 'Funny', SelfieType),
+               SelfieType = ifelse(SelfieType == '3', 'Ironic', SelfieType),
+               SelfieType = ifelse(SelfieType == '4', 'Serious', SelfieType),
+               SelfieType = ifelse(SelfieType == '5', 'Ugly', SelfieType))
+```
+
+Let's make a copy of the response variable which transforms the verbal labels into a numeric variable (better for ordinal regression).
+
+```{r response_numeric, message = FALSE, warning = FALSE}
+self <- mutate(self,
+               ResponseNum = Response,
+               ResponseNum = ifelse(ResponseNum == 'Not at all well', 1, ResponseNum),
+               ResponseNum = ifelse(ResponseNum == 'Not well', 2, ResponseNum),
+               ResponseNum = ifelse(ResponseNum == 'Neither well nor badly', 3, ResponseNum),
+               ResponseNum = ifelse(ResponseNum == 'Well', 4, ResponseNum),
+               ResponseNum = ifelse(ResponseNum == 'Very well', 5, ResponseNum),
+               ResponseNum = as.numeric(ResponseNum))
+```
+
+We will get rid of NA's (which correspond to incomplete surveys) as well as those surveys for which we have less than 80% of the responses.
+
+```{r clean_NAs, message = FALSE, warning = FALSE}
+# Get rid of NAs:
+
+self <- filter(self,
+               !is.na(ResponseNum))
+
+# Define minimum number of data points needed (out of 80 responses):
+
+xmin <- 0.8 * 80
+
+# Get names of subjects for which there's less than xmin responses:
+
+these_ids <- names(table(self$ResponseId)[table(self$ResponseId) < xmin])
+
+# Get subjects that have those names:
+
+self <- filter(self,
+               !(ResponseId %in% these_ids))
+```
+
+We want to analyze the different hashtag ratings as separate variables. Because of this, we'll reshape the long data frame into a wide data frame where each rating scale is its own column.
+
+```{r make_wide_again, message = FALSE, warning = FALSE}
+self_long <- spread(select(self, -Response, -Condition),
+                    SelfieType, ResponseNum)
+```
+
+We will exclude those for which the demographic information is NA (since we want to incorporate demographic information into the analysis).
+
+```{r exclude_NAs, message = FALSE, warning = FALSE}
+self_long <- filter(self_long,
+                    !is.na(Selfietaking),
+                    !is.na(Age),
+                    !is.na(Country))
+```
+
+We now need to clean the country column. First, we will exclude those that are clearly not in a country that is English-speaking.
+
+
+```{r exclude_nonEnglish, message = FALSE, warning = FALSE}
+not_these <- c('pakistan', 'Italy', 'Brazil', 'Co. Antrim',
+               'Romania', 'Thailand')
+self_long <- filter(self_long,
+                    !(Country %in% not_these))
+```
+
+- @Ruth: What do you want me to do about these country labels?
+
+```{r unique_countries, message = FALSE, warning = FALSE}
+sort(unique(self_long$Country))
+```
+
+Finally, we will write this cleaned data frame into a new file:
+
+```{r write_file, message = FALSE, warning = FALSE}
+write_csv(self_long, 'data/selfies_cleaned.csv')
+```
+
+
+
+

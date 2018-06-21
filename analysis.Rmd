@@ -1,0 +1,677 @@
+---
+title: "Ugly Selfies Experiment Analysis"
+author: "Ruth Page (principal investigator), Bodo Winter (analysis)"
+date: "6/11/2018"
+output: html_document
+---
+
+## Introduction
+
+In this file, the Qualtrics data will be analyzed. It requires the "selfies_cleaned.csv" file that is produced by the "preprocessing.Rmd" Markdown script. The analysis is separated into the following stages:
+
+- analysis of correlations between hashtags
+- analysis of condition effects onto hashtag ratings
+- analysis of individual differences in condition effects
+
+
+
+```{r load_stuff, message = FALSE}
+library(stringr)
+library(lme4)
+library(afex)
+library(brms)
+library(MuMIn)
+library(tidyverse)
+library(factoextra)
+library(gridExtra)
+
+# load ggplot theme:
+source('theme_timo.R')
+
+# load data:
+self <- read_csv('data/selfies_cleaned.csv')
+self
+```
+
+Through these and the analyses below, we want to have unique item identifiers. Since the entire design is between-items, these item identifiers can be created by pasting all the condition columns together.
+
+```{r item_identifiers, message = FALSE}
+self <- mutate(self,
+               ItemID = str_c(StimGender, ':', Tilt, ':', Distance, ':', Eyes))
+length(unique(self$ItemID))
+```
+
+There were 16 unique items.
+
+Let's check the basic stats for participants (also what is reported in the paper):
+
+```{r ppt_info, message = FALSE}
+# Participants:
+length(unique(self$ResponseId))
+# Participant age range:
+ppt_demo <- filter(self, !duplicated(ResponseId))
+range(ppt_demo$Age)
+# Participant mean and sd age:
+mean(ppt_demo$Age); sd(ppt_demo$Age)
+# How many per decade?
+table(cut(ppt_demo$Age, breaks = seq(10, 70, 10)))
+prop.table(table(cut(ppt_demo$Age, breaks = seq(10, 70, 10))))
+# Gender?
+table(ppt_demo$Gender)
+prop.table(table(ppt_demo$Gender))
+# Total data points:
+nrow(self)
+```
+
+
+## Analysis 1: Correlations between hashtags
+
+We are interested whether across items, ugliness ratings are correlated with funniness ratings etc. For this, we can compute item-based averages (we are ignoring by-subject variation in this specific analysis).
+
+```{r correlations, message = FALSE}
+byitem_avg <- self %>% group_by(ItemID) %>%
+  summarize(Boring = mean(Boring, na.rm = TRUE),
+            Funny = mean(Funny, na.rm = TRUE),
+            Ironic = mean(Ironic, na.rm = TRUE),
+            Serious = mean(Serious, na.rm = TRUE),
+            Ugly = mean(Ugly, na.rm = TRUE))
+cor_matrix <- cor(select(byitem_avg, -ItemID), use = 'pairwise.complete')
+round(cor_matrix, 2)
+```
+
+These are Pearson's correlation coefficients. There are high positive correlations between seriousness and borigness ratings (r = 0.81) and between ugliness and funniness ratings (r = 0.75). There are strong negative correlations between funniness and boringness (r = -0.76), and between funniness and seriousness (r = -0.92).
+
+We can perform item-wise significance tests of these correlations.
+
+```{r cor_sig, message = FALSE}
+attach(byitem_avg)
+cor.test(Boring, Funny)	# anti-correlated
+cor.test(Boring, Ironic)
+cor.test(Boring, Serious)	# correlated
+cor.test(Boring, Ugly)
+cor.test(Funny, Ironic)
+cor.test(Funny, Serious)	# anti-correlated
+cor.test(Funny, Ugly)	# correlated
+cor.test(Ironic, Serious)
+cor.test(Ironic, Ugly)
+cor.test(Serious, Ugly)	# anti-correlated
+detach(byitem_avg)
+```
+
+We are performing multiple comparisons here, thus inflating our family-wise Type I error rate. It would be important to know that the results are substantively the same if we correct for performing 10 significance tests.
+
+
+
+```{r cor_sig_corr, message = FALSE}
+attach(byitem_avg)
+p.adjust(cor.test(Boring, Funny)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Boring, Ironic)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Boring, Serious)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Boring, Ugly)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Funny, Ironic)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Funny, Serious)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Funny, Ugly)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Ironic, Serious)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Ironic, Ugly)$p.value, n = 10, method = 'bonferroni')
+p.adjust(cor.test(Serious, Ugly)$p.value, n = 10, method = 'bonferroni')
+detach(byitem_avg)
+```
+
+Most of the p-values that were significant before are still significant after correction. The only result for which there is a change in substantive conclusion after correction is between seriousness and ugliness ratings, which is then not significant anymore (p = 0.08). The corrected p-values will be reported in the paper.
+
+Let's make a plot of the variables that correlate:
+
+
+```{r plot_correlations, message = FALSE, fig.width = 12, fig.height = 8}
+p1 <- ggplot(byitem_avg, aes(x = Ugly, y = Funny)) +
+  geom_point(size = 2) +
+  geom_smooth(method = 'lm', color = 'black') +
+  theme_timo + xlim(1, 4) + ylim(1, 4) + 
+  ggtitle('(a) Ugly ~ Funny')
+p2 <- ggplot(byitem_avg, aes(x = Serious, y = Boring)) +
+  geom_point(size = 2) +
+  geom_smooth(method = 'lm', color = 'black') +
+  theme_timo + xlim(1, 4) + ylim(1, 4) + 
+  ggtitle('(b) Serious ~ Boring')
+p3 <- ggplot(byitem_avg, aes(x = Funny, y = Serious)) +
+  geom_point(size = 2) +
+  geom_smooth(method = 'lm', color = 'black') +
+  theme_timo + xlim(1, 4) + ylim(1, 4) + 
+  ggtitle('(c) Funny ~ Serious')
+p4 <- ggplot(byitem_avg, aes(x = Funny, y = Boring)) +
+  geom_point(size = 2) +
+  geom_smooth(method = 'lm', color = 'black') +
+  theme_timo + xlim(1, 4) + ylim(1, 4) + 
+  ggtitle('(d) Funny ~ Boring')
+# create plot matrix
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+We can perform a PCA to further explore by-item differences further.
+
+```{r pca, message = FALSE}
+self_pca <- prcomp(byitem_avg[, -1], center = TRUE, scale = TRUE)
+```
+
+Let's have a look at a scree plot to see how much each dimension contributes:
+
+```{r screeplot, message = FALSE}
+fviz_screeplot(self_pca, choice = 'eigenvalue') + 
+  geom_hline(yintercept = 1.0, linetype = 2, size = 2) + theme_timo
+```
+
+This scree plot suggests that at maximum, there should be two dimensions, if not only one (the second dimension barely passes the criteria for Kaiser's rule that eigenvalues should be > 1).
+
+Let's create a variable coordinate plot for the first two dimensions:
+
+```{r variable_coordinate_plot, message = FALSE}
+fviz_pca_var(self_pca) + theme_timo
+```
+
+This shows that the biggest difference in the ratings (dimension 1) is between funniness/ugliness ratings and seriousness/boringness ratings (dimension 2), which explains about 65% of the variation in ratings.
+
+Let's have a look at the loadings for each dimension:
+
+```{r loadings, message = FALSE}
+round(self_pca$rotation, 2)
+```
+
+The first dimension is a little messy, but the biggest contrast is between boring (-0.44) and serious (-0.53) on the one side, and funny (+0.55) and ugly (+0.42) on the other. Ironic has intermediate loading on this dimension.
+
+Let's extract the scores for each word.
+
+```{r pca_scores, message = FALSE}
+self_scores <- as.data.frame(self_pca$x)
+self_scores$Condition <- byitem_avg$ItemID
+self_scores <- separate(self_scores,
+                        Condition, into = c('StimGender', 'Tilt', 'Distance', 'Eyes'))
+```
+
+Let's make a plot of this:
+
+
+```{r plot_scores, message = FALSE}
+self_scores %>% ggplot(aes(x = PC1, y = PC2, col = Tilt, shape = Distance)) + geom_point(size = 5) + geom_text(aes(x = PC1 + 0.4, y = PC2, label = Eyes)) + theme_timo
+```
+
+Gender is ignored in this graph. The color coding clearly shows how FromBelow stimuli are to the right on dimension 1 (ugliness-funniness) than the Level stimuli, which are closer towards the serious-boring pole. Furthermore, it looks as if within the FromBelow (red) stimuli, the Near responses are more ugly-funny than the Far responses.
+
+## Analysis 2: Test of condition effects
+
+In this section, we will use linear mixed effects models to test the condition effects. We will build separate models for each rating scale. We will fit a linear mixed effects model in which the rating scale is the main dependent variable. In each model, the dependent variable is regressed onto the four condition variables (fixed effects, no interactions). As random effects, we have random intercepts for subjects and items. For items, we do not need any random slopes since conditions do not vary within items. For subjects, we will add random slopes for each of the fixed effects. The random effects structure includes correlations between random slopes.
+
+The main analysis is Bayesian, using the brms package. However, to easily compute R-squared values, frequentist linear mixed effects models were fitted as well. For this, we use the mixed() function from the afex package to fit these models, which fits models with REML = FALSE (Maximum Likelihood) and computes p-values based on likelihood ratio tests comparing the models with the fixed effect in question against the model without the fixed effect in question.
+
+```{r mixed_models, message = FALSE, cache = TRUE, warning = FALSE}
+print(boring.afex <- mixed(Boring ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, method = 'LRT'))
+
+print(funny.afex <- mixed(Funny ~ 1 +
+                            Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                          data = self, method = 'LRT'))
+
+print(ironic.afex <- mixed(Ironic ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, method = 'LRT'))
+
+print(serious.afex <- mixed(Serious ~ 1 +
+                              Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                            data = self, method = 'LRT'))
+
+print(ugly.afex <- mixed(Ugly ~ 1 +
+                           Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                         data = self, method = 'LRT'))
+```
+
+There are convergence issues for the Ironic and the Serious models.
+
+We can use R-squared (marginal R-squared for fixed effects, following Nakagawa & Schielzeth, 2013) to assess how good the predictors explain variation for each of the rating scales.
+
+```{r rsquared, message = FALSE}
+# Extract first
+print(boring.rsq <- r.squaredGLMM(boring.afex$full_model))
+print(funny.rsq <- r.squaredGLMM(funny.afex$full_model))
+print(ironic.rsq <- r.squaredGLMM(ironic.afex$full_model))
+print(serious.rsq <- r.squaredGLMM(serious.afex$full_model))
+print(ugly.rsq <- r.squaredGLMM(ugly.afex$full_model))
+```
+
+
+Higher values correspond to more variance described. Together, the four predictors are best at accounting for variation in responses for ugliness ratings (17% of the variation) and funniness ratings (15%). The four predictors account for only 10% variation in seriousness ratings. Finally, for boring and ironic ratings, the described variation is quite marginal, with only 3% and 2% respectively. This suggests that the condition "don't do much" for boring and ironic ratings, compared to ugly and funny ratings.
+
+It seems that the R-square values might correspond to frequency with which the corresponding hashtags are observed in the instagram corpus.
+
+```{r rsquared_vs_frequency, message = FALSE, fig.width = 8, fig.height = 6}
+# get corpus frequencies:
+insta <- read_csv('data/instagram_hashtag_frequency.csv')
+# compute cumulative frequencies and their logs:
+insta <- insta %>% group_by(type) %>%
+  summarize(freq = sum(frequency)) %>% 
+  mutate(log_freq = log10(freq))
+# get the r-squared values (marginal):
+insta$rsq <- c(boring.rsq['R2m'],
+               funny.rsq['R2m'],
+               ironic.rsq['R2m'],
+               serious.rsq['R2m'],
+               ugly.rsq['R2m'])
+# correlate these:
+with(insta, cor.test(rsq, log_freq))
+# linear model of this:
+freq_mdl <- lm(rsq ~ log_freq, data = insta)
+xvals <- seq(3, 5, 0.01)
+mypreds <- as.data.frame(predict.lm(freq_mdl,
+                         data.frame(log_freq = xvals),
+                         se.fit = TRUE)[1:2]) %>% 
+  mutate(LB = fit - 1.96 * se.fit, UB = fit + 1.96 * se.fit) %>% 
+  mutate(rsq = fit)
+mypreds$xvals <- xvals
+# make a plot of this:
+ggplot(mypreds) +
+  geom_ribbon(fill = rgb(0, 0, 0, 0.3),
+              aes(x = xvals, ymin = LB, ymax = UB)) +
+  geom_abline(aes(intercept = coef(freq_mdl)[1],
+              slope = coef(freq_mdl)[2]), size = 1.5) +
+  geom_text(data = insta, aes(x = log_freq, y = rsq, label = type),
+            hjust = 0.5, size = 5, fontface = 'bold') +
+  xlim(3, 5) + ylim(-0.1, 0.2) + ggtitle('Model fit by Instagram frequency') + xlab('R-squared (marginal)') + ylab('Log 10 Frequency') +
+  theme_timo
+# (actually, this graph doesn't make much sense because the linear model doesn't know that these R-squared values can't go much below 0)
+```
+
+Same thing with Bayesian analysis and ordinal regression. We're going to fit an ordinal logistic regression model. These are fairly agnostic priors.
+
+```{r set_priors, message = FALSE}
+my_priors <- c(prior(normal(0, 2), class = b))
+```
+
+Set cores so that I can compute in parallel (faster).
+
+```{r set_cores, message = FALSE}
+options(mc.cores=parallel::detectCores())
+```
+
+Set controls for MCMC sampling that make it more likely to converge.
+
+```{r set_controls, message = FALSE}
+my_controls <- list(adapt_delta = 0.99,
+                    max_treedepth = 13)
+xwarmup <- 2000
+xiter <- 4000
+```
+
+Run the Bayesian model.
+
+```{r run_brm, message = FALSE, cache = TRUE, eval = FALSE}
+set.seed(42)
+boring.brm <- brm(Boring ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, prior = my_priors,
+                  control = my_controls,
+                  warmup = xwarmup, iter = xiter, chains = 4,
+                  family = cumulative('logit'))
+funny.brm <- brm(Funny ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, prior = my_priors,
+                  control = my_controls,
+                  warmup = xwarmup, iter = xiter, chains = 4,
+                  family = cumulative('logit'))
+serious.brm <- brm(Serious ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, prior = my_priors,
+                  control = my_controls,
+                  warmup = xwarmup, iter = xiter, chains = 4,
+                  family = cumulative('logit'))
+ironic.brm <- brm(Ironic ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, prior = my_priors,
+                  control = my_controls,
+                  warmup = xwarmup, iter = xiter, chains = 4,
+                  family = cumulative('logit'))
+ugly.brm <- brm(Ugly ~ 1 +
+                             Tilt + Distance + Eyes + StimGender + 
+                              (1 + Tilt + Distance + Eyes + StimGender|ResponseId) + (1|ItemID),
+                           data = self, prior = my_priors,
+                  control = my_controls,
+                  warmup = xwarmup, iter = xiter, chains = 4,
+                  family = cumulative('logit'))
+```
+
+Save these models.
+
+```{r save_models, message = FALSE, cache = TRUE, eval = FALSE}
+save(boring.brm, file = 'model_files/boring.brm.RData')
+save(funny.brm, file = 'model_files/funny.brm.RData')
+save(serious.brm, file = 'model_files/serious.brm.RData')
+save(ironic.brm, file = 'model_files/ironic.brm.RData')
+save(ugly.brm, file = 'model_files/ugly.brm.RData')
+```
+
+Load models (if eval = FALSE for the other chunks).
+
+```{r load_models, message = FALSE, cache = TRUE, eval = TRUE}
+load('model_files/boring.brm.RData')
+load('model_files/funny.brm.RData')
+load('model_files/serious.brm.RData')
+load('model_files/ironic.brm.RData')
+load('model_files/ugly.brm.RData')
+```
+
+Print the models outputs.
+
+```{r print_models, message = FALSE}
+summary(boring.brm)
+summary(funny.brm)
+summary(serious.brm)
+summary(ironic.brm)
+summary(ugly.brm)
+```
+
+Plot the Bayesian ordinal regression model (odds ratios).
+
+```{r plot_bayes_coeffs, message = FALSE, fig.width = 8, fig.height = 5}
+# Extract the relevant coefficients and 95% credible intervals:
+ugly_coefs <- as.data.frame(fixef(ugly.brm)[-(1:4), ])
+boring_coefs <- as.data.frame(fixef(boring.brm)[-(1:4), ])
+serious_coefs <- as.data.frame(fixef(serious.brm)[-(1:4), ])
+ironic_coefs <- as.data.frame(fixef(ironic.brm)[-(1:4), ])
+funny_coefs <- as.data.frame(fixef(funny.brm)[-(1:4), ])
+
+# Name the rows transparently:
+
+effect_order <- c('Level->Underneath',
+                  'Far->Near', 'Direct->Side',
+                  'Female->Male')
+effect_order <- factor(effect_order,
+                       levels = rev(effect_order))
+
+boring_coefs$Effect <- effect_order
+funny_coefs$Effect <- effect_order
+serious_coefs$Effect <- effect_order
+ironic_coefs$Effect <- effect_order
+ugly_coefs$Effect <- effect_order
+
+# Plot the coefficients:
+ugly.p <- ugly_coefs[-4, ] %>% ggplot(aes(y = Estimate, x = Effect)) + 
+  geom_point(size = 3) + geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.3) + ylim(-4, 4) + coord_flip() + geom_hline(aes(yintercept = 0), linetype = 2) + theme_timo + ylab('Log Odds Ratio') + xlab('') + ggtitle('#uglyselfie')
+ugly.p
+
+funny.p <- funny_coefs[-4, ] %>% ggplot(aes(y = Estimate, x = Effect)) + 
+  geom_point(size = 3) + geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.3) + ylim(-4, 4) + coord_flip() + geom_hline(aes(yintercept = 0), linetype = 2) + theme_timo + ylab('Log Odds Ratio') + xlab('') + ggtitle('#funnyselfie')
+funny.p
+
+serious.p <- serious_coefs[-4, ] %>% ggplot(aes(y = Estimate, x = Effect)) + 
+  geom_point(size = 3) + geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.3) + ylim(-4, 4) + coord_flip() + geom_hline(aes(yintercept = 0), linetype = 2) + theme_timo + ylab('Log Odds Ratio') + xlab('') + ggtitle('#seriousselfie')
+serious.p
+
+boring.p <- boring_coefs[-4, ] %>% ggplot(aes(y = Estimate, x = Effect)) + 
+  geom_point(size = 3) + geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.3) + ylim(-4, 4) + coord_flip() + geom_hline(aes(yintercept = 0), linetype = 2) + theme_timo + ylab('Log Odds Ratio') + xlab('') + ggtitle('#boringselfie')
+boring.p
+
+ironic.p <- ironic_coefs[-4, ] %>% ggplot(aes(y = Estimate, x = Effect)) + 
+  geom_point(size = 3) + geom_errorbar(aes(ymin = Q2.5, ymax = Q97.5), width = 0.3) + ylim(-4, 4) + coord_flip() + geom_hline(aes(yintercept = 0), linetype = 2) + theme_timo + ylab('Log Odds Ratio') + xlab('') + ggtitle('#ironicselfie')
+ironic.p
+```
+
+Make plots of them together:
+
+```{r plot_multiplot, message = FALSE, fig.width = 14, fig.height = 4}
+# Make a plot with all of them together:
+grid.arrange(ugly.p, funny.p, nrow = 1)#1,200 vs. 400
+grid.arrange(serious.p, boring.p, nrow = 1)
+```
+
+## Analysis 3: Individual differences
+
+For now, I will only do this analysis with the best-performing model (ugly selfies).
+
+Let's extract the random effects estimates:
+
+```{r extract_REs, message = FALSE, cache = TRUE}
+ugly.coefs <- coef(ugly.brm)
+ugly_REs <- cbind(ugly.coefs$ResponseId[, , "TiltTilted"][, 1],
+  ugly.coefs$ResponseId[, , "DistanceNear"][, 1],
+  ugly.coefs$ResponseId[, , "EyesSide"][, 1],
+  ugly.coefs$ResponseId[, , "StimGenderMale"][, 1])
+ugly_REs <- as.data.frame(ugly_REs)
+colnames(ugly_REs) <- c('CameraAngle', 'Distance', 'EyeSight', 'Person')
+
+# Add ResponseID column:
+
+ugly_REs$Participant <- rownames(ugly_REs)
+
+# Add age info:
+
+ugly_REs <- bind_cols(ugly_REs,
+          self[match(ugly_REs$Participant, self$ResponseId), c('Age', 'Selfietaking')])
+
+# check:
+head(ugly_REs)
+```
+
+Make plots of the random effects and explore their statistics.
+
+
+```{r RE_correlations, message = FALSE, fig.width = 12, height = 8}
+# Make histograms of these:
+
+camera.hist <- ggplot(ugly_REs, aes(x = CameraAngle)) +
+  geom_density(fill = rgb(0, 0, 0, 0.3),
+               colour = rgb(0, 0, 0, 0)) + theme_timo +
+  xlim(-2, 12) + ylim(0, 0.3) +
+  xlab('Camera Angle Coefficients') +
+  ylab('Density') +  
+  geom_vline(aes(xintercept = 0), linetype = 2, size = 1) +
+  ggtitle('(a) Individual differences in Camera Angle')
+
+distance.hist <- ggplot(ugly_REs, aes(x = Distance)) +
+  geom_density(fill = rgb(0, 0, 0, 0.3),
+               colour = rgb(0, 0, 0, 0)) +
+  xlim(-2, 12) + ylim(0, 0.3) +
+  xlab('Distance Coefficients') +
+  ylab('Density') +
+  geom_vline(aes(xintercept = 0), linetype = 2, size = 1) +
+  ggtitle('(b) Individual differences in Distance') +
+  theme_timo
+
+grid.arrange(camera.hist, distance.hist, nrow = 2)
+
+# Report statistics:
+
+range(ugly_REs$CameraAngle)
+range(ugly_REs$Distance)
+range(ugly_REs$EyeSight)
+```
+
+Check correlations between the random effects estimates (to what extent is a participant's response in one condition affected by response to another?). This is also apparent in the brms output above. Here, I additionally perform a PCA on the random slopes to further explore the structure of the individual differences.
+
+```{r RE_PCA, message = FALSE}
+# Check correlations:
+
+round(cor(select(ugly_REs, CameraAngle:Person)), 2)
+
+# Perform Principal Components Analysis on random effects:
+
+ugly_RE_pca <- prcomp(select(ugly_REs, CameraAngle:Person),
+                      center = TRUE, scale = TRUE)
+
+# Scree plot for looking at how many components are supported by the data:
+
+fviz_screeplot(ugly_RE_pca, choice = 'eigenvalue') + 
+  geom_hline(yintercept = 1.0, linetype = 2, size = 2) + theme_timo
+
+# Check loadings:
+
+round(ugly_RE_pca$rotation, 2)
+```
+
+The PCA suggests that there's only one axis of variation in the random effects component. This variation seems to be dominated by how much participants respond to the three main condition variables overall, i.e., strong versus weak responders (perhaps this is due to paying attention to the task, or it is actually phenomenal).
+
+```{r age_RE_correlations, message = FALSE}
+round(cor(select(ugly_REs, CameraAngle:Person, Age)), 2)
+with(ugly_REs, cor.test(CameraAngle, Age))
+with(ugly_REs, cor.test(Distance, Age))
+with(ugly_REs, cor.test(EyeSight, Age))
+with(ugly_REs, cor.test(Person, Age))
+```
+
+Make a plot of the correlation with age:
+
+```{r age_cameraangle_plot, message = FALSE, fig.width = 8, height = 6}
+ggplot(ugly_REs, aes(x = Age, y = CameraAngle)) +
+  geom_point(size = 2) +
+  geom_smooth(method = 'lm', color = 'black') +
+  theme_timo + 
+  ggtitle('Camera Angle coefficient by participant age') + ylab('Camera Angle coefficient')
+```
+
+
+Let's look at selfie-taking behavior:
+
+```{r selfie_taking_RE_correlations, message = FALSE}
+# Check overall selfie-taking behavior:
+table(ugly_REs$Selfietaking)
+round(prop.table(table(ugly_REs$Selfietaking)), 2)
+# First as a simple factor:
+anova(lm(CameraAngle ~ Selfietaking, data = ugly_REs))
+anova(lm(Distance ~ Selfietaking, data = ugly_REs))
+anova(lm(EyeSight ~ Selfietaking, data = ugly_REs))
+# R-squared:
+summary(lm(CameraAngle ~ Selfietaking, data = ugly_REs))$r.squared
+summary(lm(Distance ~ Selfietaking, data = ugly_REs))$r.squared
+summary(lm(EyeSight ~ Selfietaking, data = ugly_REs))$r.squared
+# Then numerical coding:
+ugly_REs <- mutate(ugly_REs,
+                   Selfietaking_numeric = ifelse(Selfietaking == 'Less than once a week', 0, Selfietaking),
+                   Selfietaking_numeric = ifelse(Selfietaking_numeric == 'Once a week', 1, Selfietaking_numeric),
+                   Selfietaking_numeric = ifelse(Selfietaking_numeric == 'Several times a week', 2, Selfietaking_numeric),
+                   Selfietaking_numeric = ifelse(Selfietaking_numeric == 'At least once a day', 3, Selfietaking_numeric),
+                   Selfietaking_numeric = as.numeric(Selfietaking_numeric))
+# Then models:
+summary(lm(CameraAngle ~ Selfietaking_numeric, data = ugly_REs))
+summary(lm(Distance ~ Selfietaking_numeric, data = ugly_REs))
+summary(lm(EyeSight ~ Selfietaking_numeric, data = ugly_REs))
+```
+
+Extract principal components scores (PC1) and correlate them with age and selfie-taking:
+
+```{r REs_PCA_explore, message = FALSE, fig.width = 10, fig.height = 6}
+ugly_REs$PC1 <- ugly_RE_pca$x[, 1]
+# PC1 by age:
+ugly_REs %>% ggplot(aes(x = Age, y = PC1, col = Selfietaking)) +
+  geom_point() + geom_smooth(method = 'lm') + theme_timo
+# Check correlation:
+with(ugly_REs, cor.test(Age, PC1))
+```
+
+Check effect of selfie-taking on PC1.
+
+```{r REs_PCA_selfies, message = FALSE}
+# Check by-selfie:
+ugly_REs %>%
+  group_by(Selfietaking) %>%
+  summarize(PC1_M = mean(PC1, na.rm = TRUE))
+anova(lm(PC1 ~ Selfietaking, data = ugly_REs))
+```
+
+
+## Analysis 4: Descriptive means
+
+Let's plot some descriptive means for ugly.
+
+```{r ugly_means, message = FALSE, fig.width = 8, fig.height = 6}
+self %>% group_by(Distance, Tilt) %>%
+  summarize(Ugly = mean(Ugly, na.rm = TRUE)) %>%
+  ggplot(aes(x = Tilt, y = Ugly, fill = Distance)) +
+  geom_bar(stat = 'identity', position = 'dodge') + theme_timo +
+  ylim(0, 4) + scale_fill_manual(values = c('steelblue', 'darkgoldenrod2')) + ggtitle('#uglyselfie') + xlab('Camera Angle')
+```
+
+Same for funny.
+
+```{r funny_means, message = FALSE, fig.width = 8, fig.height = 6}
+self %>% group_by(Distance, Tilt) %>%
+  summarize(Funny = mean(Funny, na.rm = TRUE)) %>%
+  ggplot(aes(x = Tilt, y = Funny, fill = Distance)) +
+  geom_bar(stat = 'identity', position = 'dodge') + theme_timo +
+  ylim(0, 4) + scale_fill_manual(values = c('steelblue', 'darkgoldenrod2')) + ggtitle('#funnyselfie') + xlab('Camera Angle')
+
+```
+
+Same for serious selfie.
+
+```{r serious_means, message = FALSE, fig.width = 8, fig.height = 6}
+self %>% group_by(Distance, Tilt) %>%
+  summarize(Serious = mean(Serious, na.rm = TRUE)) %>%
+  ggplot(aes(x = Tilt, y = Serious, fill = Distance)) +
+  geom_bar(stat = 'identity', position = 'dodge') + theme_timo +
+  ylim(0, 4) + scale_fill_manual(values = c('steelblue', 'darkgoldenrod2')) + ggtitle('#seriousselfie') + xlab('Camera Angle')
+```
+
+Same for boring.
+
+```{r boring_means, message = FALSE, fig.width = 8, fig.height = 6}
+self %>% group_by(Distance, Tilt) %>%
+  summarize(Boring = mean(Boring, na.rm = TRUE)) %>%
+  ggplot(aes(x = Tilt, y = Boring, fill = Distance)) +
+  geom_bar(stat = 'identity', position = 'dodge') + theme_timo +
+  ylim(0, 4) + scale_fill_manual(values = c('steelblue', 'darkgoldenrod2')) + ggtitle('#boringselfie') + xlab('Camera Angle')
+
+```
+
+Same for ironic.
+
+```{r ironic_means, message = FALSE, fig.width = 8, fig.height = 6}
+self %>% group_by(Distance, Tilt) %>%
+  summarize(Ironic = mean(Ironic, na.rm = TRUE)) %>%
+  ggplot(aes(x = Tilt, y = Ironic, fill = Distance)) +
+  geom_bar(stat = 'identity', position = 'dodge') + theme_timo +
+  ylim(0, 4) + scale_fill_manual(values = c('steelblue', 'darkgoldenrod2')) + ggtitle('#ironicselfie') + xlab('Camera Angle')
+
+```
+
+Eyes and ironic:
+
+```{r ironic_eyes, message = FALSE, fig.width = 8, fig.height = 6}
+self %>% group_by(Eyes) %>%
+  summarize(Ironic = mean(Ironic, na.rm = TRUE)) %>%
+  ggplot(aes(x = Eyes, y = Ironic, fill = Eyes)) +
+  geom_bar(stat = 'identity', position = 'dodge') + theme_timo +
+  ylim(0, 4) + scale_fill_manual(values = c('steelblue', 'darkgoldenrod2')) + ggtitle('#ironicselfie: eyes') + xlab('Eyes')
+
+```
+
+Descriptive means:
+
+```{r descriptive_means, message = FALSE}
+self %>% group_by(Tilt) %>%
+  summarize(Ugly = round(mean(Ugly, na.rm = TRUE), 2),
+            Funny = round(mean(Funny, na.rm = TRUE), 2),
+            Serious = round(mean(Serious, na.rm = TRUE), 2),
+            Boring = round(mean(Funny, na.rm = TRUE), 2),
+            Ironic = round(mean(Ironic, na.rm = TRUE), 2))
+self %>% group_by(Distance) %>%
+  summarize(Ugly = round(mean(Ugly, na.rm = TRUE), 2),
+            Funny = round(mean(Funny, na.rm = TRUE), 2),
+            Serious = round(mean(Serious, na.rm = TRUE), 2),
+            Boring = round(mean(Funny, na.rm = TRUE), 2),
+            Ironic = round(mean(Ironic, na.rm = TRUE), 2))
+self %>% group_by(Eyes) %>%
+  summarize(Ugly = round(mean(Ugly, na.rm = TRUE), 2),
+            Funny = round(mean(Funny, na.rm = TRUE), 2),
+            Serious = round(mean(Serious, na.rm = TRUE), 2),
+            Boring = round(mean(Funny, na.rm = TRUE), 2),
+            Ironic = round(mean(Ironic, na.rm = TRUE), 2))
+```
+
+
+
