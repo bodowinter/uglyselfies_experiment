@@ -1,4 +1,4 @@
-Statistical analysis of Canadian Vowel Shift Analysis
+Statistical analysis of #uglyselfie data
 =============
 
 -	**Study design & data collection:** Ruth Page (principal investigator)
@@ -25,7 +25,7 @@ Statistical analysis of Canadian Vowel Shift Analysis
 ## Data files contained in this analysis:
 
 -	qualtrics_raw_data_june6_2018_01.58.csv<br>
-	Raw data straight from Qualtrics
+	Raw data straight from Qualtrics / Amazon Mechanical Turk
 -	selfies_cleaned.csv<br>
 	The result of running preprocessing.Rmd
 -	instagram_hashtag_frequency.csv<br>
